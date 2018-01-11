@@ -137,13 +137,14 @@ contract Plasma {
       uint block;
       address addr;
       uint value;
+      uint time; // wait for 
    }
    
    Elem[] pqueue;
    
    function progress() public {
       Elem storage x = pqueue[pqueue[0].next];
-      require(blocks[x.block].stamp > block.timestamp + 7 days);
+      require(blocks[x.block].stamp + 7 days < block.timestamp);
       x.addr.transfer(x.value);
       pqueue[0].next = x.next;
       pqueue[x.next].prev = 0;
@@ -151,10 +152,11 @@ contract Plasma {
       x.next = 0; x.prev = 0; x.block = 0; x.addr = 0; x.value = 0;
    }
    
-   function startExit(uint bnum, uint pos, bytes32[] proof, uint pqhint) public {
+   function startExit(uint bnum, uint pos, bytes32[] proof) public {
        require(bytes32(msg.sender) == proof[0]);
        Block storage b = blocks[bnum];
        
+       require(blocks[bnum].stamp + 7 days > block.timestamp);
        require(b.state == getRoot(proof, pos));
        
        uint e_pos = pqueue.length;
@@ -164,6 +166,24 @@ contract Plasma {
        elem.block = bnum;
        elem.addr = msg.sender;
        elem.value = uint(proof[1]);
+       elem.time = block.timestamp;
+   }
+   
+   function challengeExit(uint e_pos, bytes32 proof, uint8 v, bytes32 r, bytes32 s, uint bnum) public {
+       Elem storage elem = pqueue[e_pos];
+       
+       require(bnum > elem.block);
+       require(keccak256("Truebit Plasma", this, blocks[bnum].state) == proof);
+       require(ecrecover(proof, v, r, s) == elem.addr);
+       
+       elem.time = uint(-1);
+   }
+   
+   function exitTimeout(uint e_pos, uint pqhint) public {
+   
+       Elem storage elem = pqueue[e_pos];
+       
+       require(elem.time + 1 days < block.timestamp);
 
        Elem storage prev = pqueue[pqhint];
        Elem storage next = pqueue[prev.next];
