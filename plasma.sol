@@ -36,7 +36,12 @@ contract Plasma {
     bytes32 init;
 
     struct Block {
-       bytes32 tr;
+       // there are two types of blocks
+       bytes32 tr;       // 1
+       bytes32[] input;  // 2
+       
+       uint stamp;
+       
        uint task;
        bytes32 state; // state is settled from the previous one
        bytes32 state_file;
@@ -53,14 +58,26 @@ contract Plasma {
        
        code = code_address;     // address for wasm file in IPFS
        init = code_hash;        // the canonical hash
+       
+       pqueue.length = 1;
+       
     }
 
     function submitBlock(bytes32 b) public {
        uint bnum = blocks.length;
        blocks.length++;
        blocks[bnum].tr = b;
+       blocks[bnum].stamp = block.timestamp;
+    }
+    
+    function deposit() public payable {
+       uint bnum = blocks.length;
+       blocks.length++;
+       blocks[bnum].input.push(bytes32(msg.value));
+       blocks[bnum].input.push(bytes32(msg.sender));
     }
 
+    // need to check that the file has correct name
     function validate(uint bnum, bytes32 file) public {
        Block storage b = blocks[bnum];
        require(b.tr == filesystem.getRoot(file));
@@ -73,7 +90,24 @@ contract Plasma {
        filesystem.finalizeBundleIPFS(bundle, code, init);
       
        b.task = truebit.addWithParameters(filesystem.getInitHash(bundle), 1, 1, idToString(bundle), 20, 25, 8, 20, 10);
-       truebit.requireFile(b.task, hashName("output.data"), 0);
+       truebit.requireFile(b.task, hashName("state.data"), 1);
+
+       task_to_id[b.task] = bnum;
+    }
+
+    // need to check that the file has correct name
+    function validateDeposit(uint bnum) public {
+       Block storage b = blocks[bnum];
+       
+       require(b.task == 0);
+       Block storage last = blocks[bnum-1];
+       bytes32 bundle = filesystem.makeBundle(bnum);
+       bytes32 file = filesystem.createFileWithContents("input.data", bnum, b.input, b.input.length*32);
+       filesystem.addToBundle(bundle, file);
+       filesystem.addToBundle(bundle, last.state_file);
+       filesystem.finalizeBundleIPFS(bundle, code, init);
+      
+       b.task = truebit.addWithParameters(filesystem.getInitHash(bundle), 1, 1, idToString(bundle), 20, 25, 8, 20, 10);
        truebit.requireFile(b.task, hashName("state.data"), 1);
 
        task_to_id[b.task] = bnum;
@@ -88,7 +122,62 @@ contract Plasma {
        b.state = filesystem.getRoot(files[0]);
        
     }
-    
+   
+   // Perhaps the state could have address / value pairs
+   // How can a transaction be finalized in under a week?
+   
+   // Processing exits?
+   // From priority queue, can process old enough messages
+   
+   struct Elem {
+      uint next;
+      uint prev;
+      
+      // the proof can be checked already when submitting
+      uint block;
+      address addr;
+      uint value;
+   }
+   
+   Elem[] pqueue;
+   
+   function progress() public {
+      Elem storage x = pqueue[pqueue[0].next];
+      require(blocks[x.block].stamp > block.timestamp + 7 days);
+      x.addr.transfer(x.value);
+      pqueue[0].next = x.next;
+      pqueue[x.next].prev = 0;
+      // refund gas
+      x.next = 0; x.prev = 0; x.block = 0; x.addr = 0; x.value = 0;
+   }
+   
+   function startExit(uint bnum, uint pos, bytes32[] proof, uint pqhint) public {
+       require(bytes32(msg.sender) == proof[0]);
+       Block storage b = blocks[bnum];
+       
+       require(b.state == getRoot(proof, pos));
+       
+       uint e_pos = pqueue.length;
+       pqueue.length++;
+       Elem storage elem = pqueue[e_pos];
+       
+       elem.block = bnum;
+       elem.addr = msg.sender;
+       elem.value = uint(proof[1]);
+
+       Elem storage prev = pqueue[pqhint];
+       Elem storage next = pqueue[prev.next];
+       
+       require(prev.addr == 0 || prev.block <= elem.block);
+       require(next.addr == 0 || next.block > elem.block);
+       
+       elem.next = prev.next;
+       elem.prev = next.prev;
+       
+       prev.next = e_pos;
+       next.prev = e_pos;
+   }
+
    ////////////////////////////////////
     
    function idToString(bytes32 id) public pure returns (string) {
@@ -111,6 +200,19 @@ contract Plasma {
    function hashName(string name) public pure returns (bytes32) {
       return makeMerkle(bytes(name), 0, 8);
    }
+   
+   function getRoot(bytes32[] proof, uint loc) internal pure returns (bytes32) {
+        require(proof.length >= 2);
+        bytes32 res = keccak256(proof[0], proof[1]);
+        for (uint i = 2; i < proof.length; i++) {
+            loc = loc/2;
+            if (loc%2 == 0) res = keccak256(res, proof[i]);
+            else res = keccak256(proof[i], res);
+        }
+        require(loc < 2);
+        return res;
+   }
+   
 }
 
 
