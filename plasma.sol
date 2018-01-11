@@ -1,3 +1,13 @@
+/*
+
+Truebit task will be a program that gets as input two files, the system state (for example account balances) and the transactions
+(not necessarily stored on blockchain).
+
+Transactions in the child chain:
+ * first, the value is substracted from the balance, transaction is pending
+ * then the user has to commit to a block containing the new value (where transaxction is pending), after that the transaction is settled
+
+*/
 
 pragma solidity ^0.4.16;
 
