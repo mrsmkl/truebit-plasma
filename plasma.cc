@@ -123,7 +123,9 @@ void process(FILE *f, u256 hash) {
         u256 from = get_bytes32(f);
         u256 hash = get_bytes32(f);
         Pending p = pending[from];
-        
+        if (block_hash[p.block] != hash) return;
+        balances[p.to] = p.value;
+        pending.erase(from);
     }
 }
 
