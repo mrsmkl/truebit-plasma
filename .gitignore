@@ -1,1 +1,6 @@
 compiled
+*~
+*.wast*
+*.wasm
+plasma.js
+*.o
