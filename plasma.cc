@@ -5,7 +5,9 @@
 #include <boost/multiprecision/cpp_int.hpp>
 #include <stdio.h>
 #include <map>
-    
+#include "keccak-tiny.h"
+#include <secp256k1_recovery.h>
+
 using u256 = boost::multiprecision::number<boost::multiprecision::cpp_int_backend<256, 256, boost::multiprecision::unsigned_magnitude, boost::multiprecision::unchecked, void>>;
 using s256 = boost::multiprecision::number<boost::multiprecision::cpp_int_backend<256, 256, boost::multiprecision::signed_magnitude, boost::multiprecision::unchecked, void>>;  
 
@@ -72,6 +74,108 @@ u256 max(u256 a, u256 b) {
     return a > b ? a : b;
 }
 
+std::vector<uint8_t> keccak256_v(std::vector<uint8_t> data) {
+	// std::string out(32, 0);
+	std::vector<uint8_t> out(32, 0);
+	keccak::sha3_256(out.data(), 32, data.data(), data.size());
+	return out;
+}
+
+std::vector<uint8_t> toBigEndian(u256 a) {
+    std::vector<uint8_t> res(32, 0);
+    for (auto i = res.size(); i != 0; a >>= 8, i--) {
+		res[i-1] = (uint8_t)a & 0xff;
+	}
+    return res;
+}
+
+u256 fromBigEndian(std::vector<uint8_t> const &str) {
+	u256 ret(0);
+	for (auto i: str) ret = ((ret << 8) | (u256)i);
+	return ret;
+}
+
+u256 fromBigEndian(std::vector<uint8_t>::iterator a, std::vector<uint8_t>::iterator b) {
+	u256 ret(0);
+    while (a != b) {
+        ret = ((ret << 8) | (u256)*a);
+        a++;
+    }
+	return ret;
+}
+
+u256 keccak256(std::vector<uint8_t> str) {
+    return fromBigEndian(keccak256_v(str));
+}
+
+u256 keccak256(u256 a) {
+    return keccak256(toBigEndian(a));
+}
+
+u256 keccak256(u256 a, u256 b) {
+    std::vector<uint8_t> aa = toBigEndian(a);
+    std::vector<uint8_t> bb = toBigEndian(b);
+    aa.insert(std::end(aa), std::begin(bb), std::end(bb));
+    return keccak256(aa);
+}
+
+u256 keccak256(u256 a, u256 b, u256 c) {
+    std::vector<uint8_t> aa = toBigEndian(a);
+    std::vector<uint8_t> bb = toBigEndian(b);
+    std::vector<uint8_t> cc = toBigEndian(c);
+    aa.insert(std::end(aa), std::begin(bb), std::end(bb));
+    aa.insert(std::end(aa), std::begin(cc), std::end(cc));
+    return keccak256(aa);
+}
+
+u256 keccak256(u256 a, u256 b, u256 c, u256 d) {
+    std::vector<uint8_t> aa = toBigEndian(a);
+    std::vector<uint8_t> bb = toBigEndian(b);
+    std::vector<uint8_t> cc = toBigEndian(c);
+    std::vector<uint8_t> dd = toBigEndian(d);
+    aa.insert(std::end(aa), std::begin(bb), std::end(bb));
+    aa.insert(std::end(aa), std::begin(cc), std::end(cc));
+    aa.insert(std::end(aa), std::begin(dd), std::end(dd));
+    return keccak256(aa);
+}
+
+secp256k1_context const* getCtx() {
+	static std::unique_ptr<secp256k1_context, decltype(&secp256k1_context_destroy)> s_ctx{
+		secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY),
+		&secp256k1_context_destroy
+	};
+	return s_ctx.get();
+}
+
+u256 ecrecover(std::vector<uint8_t> const& _sig, std::vector<uint8_t> _message) {
+	int v = _sig[64];
+	if (v > 3) return 0;
+
+	auto* ctx = getCtx();
+	secp256k1_ecdsa_recoverable_signature rawSig;
+	if (!secp256k1_ecdsa_recoverable_signature_parse_compact(ctx, &rawSig, _sig.data(), v))
+		return 0;
+
+	secp256k1_pubkey rawPubkey;
+	if (!secp256k1_ecdsa_recover(ctx, &rawPubkey, &rawSig, _message.data()))
+		return 0;
+
+	std::array<uint8_t, 65> serializedPubkey;
+	size_t serializedPubkeySize = serializedPubkey.size();
+	secp256k1_ec_pubkey_serialize(
+			ctx, serializedPubkey.data(), &serializedPubkeySize,
+			&rawPubkey, SECP256K1_EC_UNCOMPRESSED
+	);
+	assert(serializedPubkeySize == serializedPubkey.size());
+	// Expect single byte header of value 0x04 -- uncompressed public key.
+	assert(serializedPubkey[0] == 0x04);
+	// Create the Public skipping the header.
+    
+    std::vector<uint8_t> out(32, 0);
+	keccak::sha3_256(out.data(), 32, &serializedPubkey[1], 64);
+	return fromBigEndian(out.begin()+12, out.end());
+}
+
 void process(FILE *f, u256 hash) {
     u256 control = get_bytes32(f);
     if (control == 0) {
@@ -112,6 +216,7 @@ void process(FILE *f, u256 hash) {
         u256 s = get_bytes32(f);
         u256 v = get_bytes32(f);
         // TODO: Check signature
+        u256 hash = keccak256(from, to, value, nonce);
         u256 bal = balances[from];
         if (bal < v || nonces[from] != nonce || pending.find(from) == pending.end()) return;
         balances[from] = bal - v;
@@ -133,6 +238,8 @@ void process(FILE *f, u256 hash) {
 
 int main(int argc, char **argv) {
     u256 x;
+    std::string t1("asd");
+    std::string t2("bsd");
     x++;
     std::cout << "Checking 256-bit values: " << x << std::endl;
     /*
