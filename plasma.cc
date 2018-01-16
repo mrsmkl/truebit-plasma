@@ -244,15 +244,20 @@ void process(FILE *f, u256 hash, bool restricted, bool &eof) {
         nonces[from]++;
         pending[from] = Pending(to, value, block_number);
     }
-    if (restricted) return;
-    // Pending transaction
+    // Confirm transaction
     else if (control == 2) {
         u256 from = get_bytes32(f);
-        u256 to = get_bytes32(f);
-        u256 value = get_bytes32(f);
-        u256 block = get_bytes32(f);
-        pending[from] = Pending(to, value, block);
+        u256 hash = get_bytes32(f);
+        u256 r = get_bytes32(f);
+        u256 s = get_bytes32(f);
+        u256 v = get_bytes32(f);
+        if (ecrecover(r, s, v, hash) != from) return;
+        Pending p = pending[from];
+        if (block_hash[p.block] != hash) return;
+        balances[p.to] = p.value;
+        pending.erase(from);
     }
+    if (restricted) return;
     // Block hash
     else if (control == 3) {
         u256 num = get_bytes32(f);
@@ -269,14 +274,13 @@ void process(FILE *f, u256 hash, bool restricted, bool &eof) {
         balances[addr] = v;
         nonces[addr] = nonce;
     }
-    // Confirm transaction
+    // Pending transaction
     else if (control == 5) {
         u256 from = get_bytes32(f);
-        u256 hash = get_bytes32(f);
-        Pending p = pending[from];
-        if (block_hash[p.block] != hash) return;
-        balances[p.to] = p.value;
-        pending.erase(from);
+        u256 to = get_bytes32(f);
+        u256 value = get_bytes32(f);
+        u256 block = get_bytes32(f);
+        pending[from] = Pending(to, value, block);
     }
 }
 
@@ -289,16 +293,35 @@ void processFile(char const *fname, u256 hash, bool restr) {
     fclose(f);
 }
 
-void put_bytes32(FILE *f) {
+void put_bytes32(FILE *f, u256 a) {
+    std::vector<uint8_t> v = toBigEndian(a);
+    fwrite(v.data(), 1, 32, f);
 }
 
 void finalize() {
     // open file for writing
     FILE *f = fopen("state.data", "rb");
-    // output balances
-    // output pending
     // output block hashes <-- old hashes could be removed
-    // also hash that was calculated for the state that was read
+    for (auto const& x : block_hash) {
+        put_bytes32(f, 3);
+        put_bytes32(f, x.first);
+        put_bytes32(f, x.second);
+    }
+    // output balances
+    for (auto const& x : balances) {
+        put_bytes32(f, 3);
+        put_bytes32(f, x.first);
+        put_bytes32(f, balances[x.first]);
+        put_bytes32(f, nonces[x.first]);
+    }
+    // output pending
+    for (auto const& x : pending) {
+        put_bytes32(f, x.first);
+        put_bytes32(f, x.second.to);
+        put_bytes32(f, x.second.value);
+        put_bytes32(f, x.second.block);
+    }
+    fclose(f);
 }
 
 // first thing is calculating the hash of the state
