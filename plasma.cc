@@ -11,13 +11,14 @@
 using u256 = boost::multiprecision::number<boost::multiprecision::cpp_int_backend<256, 256, boost::multiprecision::unsigned_magnitude, boost::multiprecision::unchecked, void>>;
 using s256 = boost::multiprecision::number<boost::multiprecision::cpp_int_backend<256, 256, boost::multiprecision::signed_magnitude, boost::multiprecision::unchecked, void>>;  
 
-u256 get_bytes32(FILE *f) {
+u256 get_bytes32(FILE *f, bool &eof) {
     uint8_t *res = (uint8_t*)malloc(32);
     int ret = fread(res, 1, 32, f);
     printf("Got %i\n", ret);
     if (ret != 32) {
         printf("Error %i: %s\n", ferror(f), strerror(ferror(f)));
         free(res);
+        eof = true;
         return 0;
     }
     u256 x;
@@ -26,6 +27,11 @@ u256 get_bytes32(FILE *f) {
         x += res[i];
     }
     return x;
+}
+
+u256 get_bytes32(FILE *f) {
+    bool foo;
+    return get_bytes32(f, foo);
 }
 
 struct tr {
@@ -59,15 +65,6 @@ std::map<u256, Pending> pending;
 
 u256 block_number;
 
-void finalize() {
-    // open file for writing
-    FILE *f = fopen("state.data", "rb");
-    // output balances
-    // output pending
-    // output block hashes <-- old hashes could be removed
-    // also hash that was calculated for the state that was read
-}
-
 // well there are two modes, one is for transaction files, not all commands are allowed there
 
 u256 max(u256 a, u256 b) {
@@ -81,24 +78,27 @@ std::vector<uint8_t> keccak256_v(std::vector<uint8_t> data) {
 	return out;
 }
 
-std::vector<uint8_t> toBigEndian(u256 a) {
+std::vector<uint8_t> toBigEndian(u256 const &a) {
+    u256 b = a;
     std::vector<uint8_t> res(32, 0);
-    for (auto i = res.size(); i != 0; a >>= 8, i--) {
-		res[i-1] = (uint8_t)a & 0xff;
+    for (int i = res.size(); i != 0; i--) {
+		res[i-1] = (uint8_t)b & 0xff;
+        // b >>= 8;
+        b = b / 256;
 	}
     return res;
 }
 
 u256 fromBigEndian(std::vector<uint8_t> const &str) {
 	u256 ret(0);
-	for (auto i: str) ret = ((ret << 8) | (u256)i);
+	for (auto i: str) ret = ((ret * 256) | (u256)i);
 	return ret;
 }
 
 u256 fromBigEndian(std::vector<uint8_t>::iterator a, std::vector<uint8_t>::iterator b) {
 	u256 ret(0);
     while (a != b) {
-        ret = ((ret << 8) | (u256)*a);
+        ret = ((ret * 256) | (u256)*a);
         a++;
     }
 	return ret;
@@ -115,7 +115,7 @@ u256 keccak256(u256 a) {
 u256 keccak256(u256 a, u256 b) {
     std::vector<uint8_t> aa = toBigEndian(a);
     std::vector<uint8_t> bb = toBigEndian(b);
-    aa.insert(std::end(aa), std::begin(bb), std::end(bb));
+    aa.insert(std::end(aa), bb.begin(), bb.end());
     return keccak256(aa);
 }
 
@@ -185,38 +185,50 @@ u256 ecrecover(u256 r, u256 s, u256 v, u256 hash) {
     return ecrecover(a, toBigEndian(hash));
 }
 
-void process(FILE *f, u256 hash) {
+std::vector<u256> hashLevel(std::vector<u256> data) {
+	std::vector<u256> res;
+	res.resize(data.size() / 2);
+	for (int i = 0; i < res.size(); i += 32) {
+        res[i] = keccak256(data[i*2], data[i*2+1]);
+	}
+	return res;
+}
+
+u256 hashRec(std::vector<u256> res) {
+    if (res.size() > 1) {
+        return hashRec(hashLevel(res));
+    }
+    else return res[0];
+}
+
+u256 hashFile() {
+    FILE *f = fopen("state.data", "rb");
+    bool eof = false;
+	std::vector<u256> res;
+	res.resize(2);
+    int level = 1;
+    int i = 0;
+    while (true) {
+        u256 elem = get_bytes32(f, eof);
+        if (eof) break;
+        if (i == res.size()) {
+            level++;
+            res.resize(res.size()*2);
+        }
+        res[i] = elem;
+    }
+    fclose(f);
+    
+    return hashRec(res);
+}
+
+void process(FILE *f, u256 hash, bool restricted, bool &eof) {
     u256 control = get_bytes32(f);
     if (control == 0) {
-        fclose(f);
-        finalize();
-        exit(0);
-    }
-    // Balance, nonce
-    else if (control == 1) {
-        u256 addr = get_bytes32(f);
-        u256 v = get_bytes32(f);
-        u256 nonce = get_bytes32(f);
-        balances[addr] = v;
-        nonces[addr] = nonce;
-    }
-    // Pending transaction
-    else if (control == 2) {
-        u256 from = get_bytes32(f);
-        u256 to = get_bytes32(f);
-        u256 value = get_bytes32(f);
-        u256 block = get_bytes32(f);
-        pending[from] = Pending(to, value, block);
-    }
-    // Block hash
-    else if (control == 3) {
-        u256 num = get_bytes32(f);
-        u256 hash = get_bytes32(f);
-        block_hash[num] = hash;
-        block_number = max(num+1, block_number);
+        eof = true;
     }
     // Transaction: remove from account, add to pending
-    else if (control == 4) {
+    if (control == 1) {
         u256 from = get_bytes32(f);
         u256 to = get_bytes32(f);
         u256 value = get_bytes32(f);
@@ -232,6 +244,31 @@ void process(FILE *f, u256 hash) {
         nonces[from]++;
         pending[from] = Pending(to, value, block_number);
     }
+    if (restricted) return;
+    // Pending transaction
+    else if (control == 2) {
+        u256 from = get_bytes32(f);
+        u256 to = get_bytes32(f);
+        u256 value = get_bytes32(f);
+        u256 block = get_bytes32(f);
+        pending[from] = Pending(to, value, block);
+    }
+    // Block hash
+    else if (control == 3) {
+        u256 num = get_bytes32(f);
+        u256 hash = get_bytes32(f);
+        block_hash[num] = hash;
+        block_number = max(num+1, block_number);
+        block_hash[block_number] = hash;
+    }
+    // Balance, nonce
+    else if (control == 4) {
+        u256 addr = get_bytes32(f);
+        u256 v = get_bytes32(f);
+        u256 nonce = get_bytes32(f);
+        balances[addr] = v;
+        nonces[addr] = nonce;
+    }
     // Confirm transaction
     else if (control == 5) {
         u256 from = get_bytes32(f);
@@ -243,18 +280,39 @@ void process(FILE *f, u256 hash) {
     }
 }
 
+void processFile(char const *fname, u256 hash, bool restr) {
+    bool eof = false;
+    FILE *f = fopen("state.data", "rb");
+    while (!eof) {
+        process(f, hash, restr, eof);
+    }
+    fclose(f);
+}
+
+void put_bytes32(FILE *f) {
+}
+
+void finalize() {
+    // open file for writing
+    FILE *f = fopen("state.data", "rb");
+    // output balances
+    // output pending
+    // output block hashes <-- old hashes could be removed
+    // also hash that was calculated for the state that was read
+}
+
 // first thing is calculating the hash of the state
 
 int main(int argc, char **argv) {
     u256 x;
-    std::string t1("asd");
-    std::string t2("bsd");
     x++;
     std::cout << "Checking 256-bit values: " << x << std::endl;
-    /*
-    FILE *f = fopen("state.data", "rb");
-    process(f);
-    */
+    u256 hash = hashFile();
+    processFile("state.data", hash, false);
+    processFile("control.data", hash, false);
+    processFile("input.data", hash, true);
+    finalize();
+    
     return 0;
 }
 
