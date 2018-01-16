@@ -176,6 +176,15 @@ u256 ecrecover(std::vector<uint8_t> const& _sig, std::vector<uint8_t> _message) 
 	return fromBigEndian(out.begin()+12, out.end());
 }
 
+u256 ecrecover(u256 r, u256 s, u256 v, u256 hash) {
+    std::vector<uint8_t> a = toBigEndian(r);
+    std::vector<uint8_t> b = toBigEndian(s);
+    std::vector<uint8_t> c = toBigEndian(v);
+    a.insert(std::end(a), std::begin(b), std::end(b));
+    a.insert(std::end(a), std::begin(c)+31, std::end(c));
+    return ecrecover(a, toBigEndian(hash));
+}
+
 void process(FILE *f, u256 hash) {
     u256 control = get_bytes32(f);
     if (control == 0) {
@@ -215,8 +224,8 @@ void process(FILE *f, u256 hash) {
         u256 r = get_bytes32(f);
         u256 s = get_bytes32(f);
         u256 v = get_bytes32(f);
-        // TODO: Check signature
-        u256 hash = keccak256(from, to, value, nonce);
+        u256 hash = keccak256(to, value, nonce);
+        if (ecrecover(r, s, v, hash) != from) return;
         u256 bal = balances[from];
         if (bal < v || nonces[from] != nonce || pending.find(from) == pending.end()) return;
         balances[from] = bal - v;
