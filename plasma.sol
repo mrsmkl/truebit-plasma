@@ -55,6 +55,8 @@ contract Plasma {
        uint task;
        bytes32 state; // state is settled from the previous one
        bytes32 state_file;
+       bytes32 balance; // file with balances
+       bytes32 balance_file;
     }
 
     Block[] blocks;
@@ -86,6 +88,14 @@ contract Plasma {
        blocks[bnum].input.push(bytes32(msg.value));
        blocks[bnum].input.push(bytes32(msg.sender));
     }
+    
+    uint nonce;
+    
+    function createEmptyFile(string fname) internal returns (bytes32) {
+       nonce++;
+       bytes32[] memory input = new bytes32[](2);
+       return filesystem.createFileWithContents(fname, nonce, input, 0);
+    }
 
     // need to check that the file has correct name
     function validate(uint bnum, bytes32 file) public {
@@ -96,11 +106,15 @@ contract Plasma {
        Block storage last = blocks[bnum-1];
        bytes32 bundle = filesystem.makeBundle(bnum);
        filesystem.addToBundle(bundle, file);
+       filesystem.addToBundle(bundle, createEmptyFile("balance.data"));
+       filesystem.addToBundle(bundle, createEmptyFile("control.data"));
        filesystem.addToBundle(bundle, last.state_file);
        filesystem.finalizeBundleIPFS(bundle, code, init);
-      
+
+
        b.task = truebit.addWithParameters(filesystem.getInitHash(bundle), 1, 1, idToString(bundle), 20, 25, 8, 20, 10);
        truebit.requireFile(b.task, hashName("state.data"), 1);
+       truebit.requireFile(b.task, hashName("balance.data"), 1);
 
        task_to_id[b.task] = bnum;
     }
@@ -112,13 +126,16 @@ contract Plasma {
        require(b.task == 0);
        Block storage last = blocks[bnum-1];
        bytes32 bundle = filesystem.makeBundle(bnum);
-       bytes32 file = filesystem.createFileWithContents("input.data", bnum, b.input, b.input.length*32);
+       bytes32 file = filesystem.createFileWithContents("control.data", bnum, b.input, b.input.length*32);
        filesystem.addToBundle(bundle, file);
        filesystem.addToBundle(bundle, last.state_file);
+       filesystem.addToBundle(bundle, createEmptyFile("balance.data"));
+       filesystem.addToBundle(bundle, createEmptyFile("input.data"));
        filesystem.finalizeBundleIPFS(bundle, code, init);
       
        b.task = truebit.addWithParameters(filesystem.getInitHash(bundle), 1, 1, idToString(bundle), 20, 25, 8, 20, 10);
        truebit.requireFile(b.task, hashName("state.data"), 1);
+       truebit.requireFile(b.task, hashName("balance.data"), 1);
 
        task_to_id[b.task] = bnum;
     }
@@ -130,6 +147,9 @@ contract Plasma {
        
        b.state_file = files[0];
        b.state = filesystem.getRoot(files[0]);
+       
+       b.balance_file = files[1];
+       b.balance = filesystem.getRoot(files[1]);
        
     }
    
@@ -167,7 +187,7 @@ contract Plasma {
        Block storage b = blocks[bnum];
        
        require(blocks[bnum].stamp + 7 days > block.timestamp);
-       require(b.state == getRoot(proof, pos));
+       require(b.balance == getRoot(proof, pos));
        
        uint e_pos = pqueue.length;
        pqueue.length++;
