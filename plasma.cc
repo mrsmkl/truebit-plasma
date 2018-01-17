@@ -14,9 +14,9 @@ using s256 = boost::multiprecision::number<boost::multiprecision::cpp_int_backen
 u256 get_bytes32(FILE *f, bool &eof) {
     uint8_t *res = (uint8_t*)malloc(32);
     int ret = fread(res, 1, 32, f);
-    printf("Got %i\n", ret);
+    // std::cout << "Got " << ret << std::endl;
     if (ret != 32) {
-        printf("Error %i: %s\n", ferror(f), strerror(ferror(f)));
+        std::cout << "Error " << ferror(f) << ": " << strerror(ferror(f)) << std::endl;
         free(res);
         eof = true;
         return 0;
@@ -26,6 +26,7 @@ u256 get_bytes32(FILE *f, bool &eof) {
         x = x*256;
         x += res[i];
     }
+    free(res);
     return x;
 }
 
@@ -147,6 +148,12 @@ secp256k1_context const* getCtx() {
 	return s_ctx.get();
 }
 
+u256 publicToAddress(std::vector<uint8_t> pubkey) {
+    std::vector<uint8_t> out(32, 0);
+	keccak::sha3_256(out.data(), 32, pubkey.data() + 1, 64);
+	return fromBigEndian(out.begin()+12, out.end());
+}
+
 u256 ecrecover(std::vector<uint8_t> const& _sig, std::vector<uint8_t> _message) {
 	int v = _sig[64];
 	if (v > 3) return 0;
@@ -185,10 +192,52 @@ u256 ecrecover(u256 r, u256 s, u256 v, u256 hash) {
     return ecrecover(a, toBigEndian(hash));
 }
 
+static const u256 c_secp256k1n("115792089237316195423570985008687907852837564279074904382605163141518161494337");
+
+struct Signature {
+    u256 r;
+    u256 s;
+    u256 v;
+    Signature() {
+    }
+    Signature(u256 a, u256 b, u256 c) {
+        r = a;
+        s = b;
+        v = c;
+    }
+};
+
+Signature sign(u256 secret, u256 hash) {
+    std::vector<uint8_t> _hash = toBigEndian(hash);
+    std::vector<uint8_t> _k = toBigEndian(secret);
+	auto* ctx = getCtx();
+	secp256k1_ecdsa_recoverable_signature rawSig;
+    
+    Signature res;
+    
+	if (!secp256k1_ecdsa_sign_recoverable(ctx, &rawSig, _hash.data(), _k.data(), nullptr, nullptr))
+		return res;
+
+	std::vector<uint8_t> s(65, 0);
+	int v = 0;
+	secp256k1_ecdsa_recoverable_signature_serialize_compact(ctx, s.data(), &v, &rawSig);
+    
+    res.r = fromBigEndian(s.begin(), s.begin()+32);
+    res.s = fromBigEndian(s.begin()+32, s.begin()+64);
+    res.v = fromBigEndian(s.begin()+64, s.end());
+
+	if (res.s > c_secp256k1n / 2) {
+		res.v = res.v ^ 1;
+		res.s = c_secp256k1n - res.s;
+	}
+	assert(res.s <= c_secp256k1n / 2);
+	return res;
+}
+
 std::vector<u256> hashLevel(std::vector<u256> data) {
 	std::vector<u256> res;
 	res.resize(data.size() / 2);
-	for (int i = 0; i < res.size(); i += 32) {
+	for (int i = 0; i < res.size(); i++) {
         res[i] = keccak256(data[i*2], data[i*2+1]);
 	}
 	return res;
@@ -201,8 +250,18 @@ u256 hashRec(std::vector<u256> res) {
     else return res[0];
 }
 
+FILE *openFile(char const *fname, char const *perm) {
+    std::cout << "Open file " << fname << " perm " << perm << std::endl;
+    FILE *f = fopen(fname, perm);
+    if (!f) {
+        std::cout << "Cannot open file " << fname << std::endl;
+        exit(-1);
+    }
+    return f;
+}
+
 u256 hashFile() {
-    FILE *f = fopen("state.data", "rb");
+    FILE *f = openFile("state.data", "rb");
     bool eof = false;
 	std::vector<u256> res;
 	res.resize(2);
@@ -216,6 +275,7 @@ u256 hashFile() {
             res.resize(res.size()*2);
         }
         res[i] = elem;
+        i++;
     }
     fclose(f);
     
@@ -237,7 +297,11 @@ void process(FILE *f, u256 hash, bool restricted, bool &eof) {
         u256 s = get_bytes32(f);
         u256 v = get_bytes32(f);
         u256 hash = keccak256(to, value, nonce);
-        if (ecrecover(r, s, v, hash) != from) return;
+        std::cout << "Processing transaction from " << from << " to " <<  to << std::endl;
+        if (ecrecover(r, s, v, hash) != from) {
+            std::cout << "Signature didn't match" << std::endl;
+            return;
+        }
         u256 bal = balances[from];
         if (bal < v || nonces[from] != nonce || pending.find(from) == pending.end()) return;
         balances[from] = bal - v;
@@ -286,7 +350,7 @@ void process(FILE *f, u256 hash, bool restricted, bool &eof) {
 
 void processFile(char const *fname, u256 hash, bool restr) {
     bool eof = false;
-    FILE *f = fopen("state.data", "rb");
+    FILE *f = openFile(fname, "rb");
     while (!eof) {
         process(f, hash, restr, eof);
     }
@@ -300,7 +364,7 @@ void put_bytes32(FILE *f, u256 a) {
 
 void finalize() {
     // open file for writing
-    FILE *f = fopen("state.data", "rb");
+    FILE *f = openFile("state.data", "wb");
     // output block hashes <-- old hashes could be removed
     for (auto const& x : block_hash) {
         put_bytes32(f, 3);
@@ -324,18 +388,119 @@ void finalize() {
     fclose(f);
 }
 
-// first thing is calculating the hash of the state
+void outputBalances() {
+    // open file for writing
+    FILE *f = openFile("balances.data", "wb");
+    // output balances
+    for (auto const& x : balances) {
+        put_bytes32(f, x.first);
+        put_bytes32(f, x.second);
+    }
+    fclose(f);
+}
+
+std::vector<uint8_t> secretToPublic(u256 secret) {
+    std::vector<uint8_t> _secret = toBigEndian(secret);
+	auto* ctx = getCtx();
+	secp256k1_pubkey rawPubkey;
+	// Creation will fail if the secret key is invalid.
+	std::vector<uint8_t> serializedPubkey(65, 0);
+	if (!secp256k1_ec_pubkey_create(ctx, &rawPubkey, _secret.data())) {
+        std::cout << "Secret key invalid" << std::endl;
+		return serializedPubkey;
+    }
+	size_t serializedPubkeySize = serializedPubkey.size();
+	secp256k1_ec_pubkey_serialize(
+			ctx, serializedPubkey.data(), &serializedPubkeySize,
+			&rawPubkey, SECP256K1_EC_UNCOMPRESSED
+	);
+	assert(serializedPubkeySize == serializedPubkey.size());
+	// Expect single byte header of value 0x04 -- uncompressed public key.
+	assert(serializedPubkey[0] == 0x04);
+    return serializedPubkey;
+}
 
 int main(int argc, char **argv) {
-    u256 x;
-    x++;
-    std::cout << "Checking 256-bit values: " << x << std::endl;
-    u256 hash = hashFile();
-    processFile("state.data", hash, false);
-    processFile("control.data", hash, false);
-    processFile("input.data", hash, true);
-    finalize();
-    
+    char opt = '0';
+    srand(time(NULL));
+    if (argc > 1) opt = argv[1][0];
+    switch (opt) {
+        case '0':
+            {
+        std::cout << "Hashing file" << std::endl;
+            u256 hash = hashFile();
+        block_hash[0] = hash;
+        std::cout << "Hash " << hash << std::endl;
+            processFile("state.data", hash, false);
+            processFile("control.data", hash, false);
+            processFile("input.data", hash, true);
+            finalize();
+            outputBalances();
+            break;
+    }
+        case 'g': {
+        std::cout << "Generating secret key (not really secure)" << std::endl;
+        std::vector<uint8_t> v(32, 0);
+        for (int i = 0; i < 32; i++) {
+            v[i] = rand() & 0xff;
+        }
+        u256 secret = fromBigEndian(v);
+        std::cout << "It is " << secret << std::endl;
+        FILE *f = openFile("secret.data", "wb");
+        put_bytes32(f, secret);
+        fclose(f);
+        std::cout << "Wrote secret to secret.data" << std::endl;
+        break;
+    }
+        case 't': {
+        std::cout << "Generating a transaction" << std::endl;
+        FILE *f = openFile("secret.data", "rb");
+        u256 secret = get_bytes32(f);
+        fclose(f);
+        
+        std::cout << "Got secret key " << secret << std::endl;
+        
+        std::vector<uint8_t> pub = secretToPublic(secret);
+        
+        u256 x = fromBigEndian(pub.begin()+1, pub.begin()+33);
+        u256 y = fromBigEndian(pub.begin()+33, pub.end());
+        
+        u256 from = publicToAddress(pub);
+        
+        std::cout << "X: " << x << " Y: " << y << std::endl;
+        std::cout << "Address: " << from << std::endl;
+        
+        u256 to = 1234567890;
+        u256 value = 333444;
+        u256 nonce = 0;
+
+        u256 hash = keccak256(to, value, nonce);
+        std::cout << "Message hash: " << hash << std::endl;
+        
+        Signature sig = sign(secret, hash);
+
+        f = openFile("input.data", "wb");
+        put_bytes32(f, 1);
+        put_bytes32(f, from);
+        put_bytes32(f, to);
+        put_bytes32(f, value);
+        put_bytes32(f, nonce);
+        
+        put_bytes32(f, sig.r);
+        put_bytes32(f, sig.s);
+        put_bytes32(f, sig.v);
+        fclose(f);
+        
+        break;
+    }
+        case 'h': {
+        // std::cout << block_hash[23] << std::endl;
+            std::cout << "Truebit Plasma task. Options: " << std::endl;
+            std::cout << "0: perform the task" << std::endl;
+            std::cout << "h: print help" << std::endl;
+            break;
+    }
+    }
     return 0;
 }
 
