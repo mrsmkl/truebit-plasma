@@ -342,7 +342,8 @@ void process(FILE *f, u256 hash, bool restricted, bool &eof) {
             return;
         }
         u256 bal = balances[from];
-        if (bal < v || nonces[from] != nonce || pending.find(from) == pending.end()) return;
+        // if has a pending transaction, ignore this one (can be resubmitted)
+        if (bal < v || nonces[from] != nonce || pending.find(from) != pending.end()) return;
         balances[from] = bal - v;
         nonces[from]++;
         pending[from] = Pending(to, value, block_number);
