@@ -469,7 +469,6 @@ std::vector<uint8_t> secretToPublic(u256 secret) {
 
 int main(int argc, char **argv) {
     char opt = '0';
-    srand(time(NULL));
     if (argc > 1) opt = argv[1][0];
     switch (opt) {
         case '0':
@@ -486,6 +485,7 @@ int main(int argc, char **argv) {
             break;
     }
         case 'g': {
+        srand(time(NULL));
         std::cout << "Generating secret key (not really secure)" << std::endl;
         std::vector<uint8_t> v(32, 0);
         for (int i = 0; i < 32; i++) {

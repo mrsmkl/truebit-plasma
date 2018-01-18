@@ -61,18 +61,18 @@ contract Plasma {
 
     Block[] blocks;
 
-    function Plasma(address tb, address fs, bytes32 init_state, bytes32 init_file, string code_address, bytes32 code_hash) public {
-       blocks.length = 1;
-       blocks[0].state = init_state;
-       blocks[0].state_file = init_file;
+    function Plasma(address tb, address fs, bytes32 init_file, string code_address, bytes32 code_hash) public {
        truebit = TrueBit(tb);
        filesystem = Filesystem(fs);
+       
+       blocks.length = 1;
+       blocks[0].state = filesystem.getRoot(init_file);
+       blocks[0].state_file = init_file;
        
        code = code_address;     // address for wasm file in IPFS
        init = code_hash;        // the canonical hash
        
-       pqueue.length = 1;
-       
+       pqueue.length = 1;       // Has only the sentinel
     }
 
     function submitBlock(bytes32 b) public {
@@ -81,20 +81,26 @@ contract Plasma {
        blocks[bnum].tr = b;
        blocks[bnum].stamp = block.timestamp;
     }
-    
+
     function deposit() public payable {
        uint bnum = blocks.length;
        blocks.length++;
-       blocks[bnum].input.push(bytes32(msg.value));
+       blocks[bnum].input.push(bytes32(4));
        blocks[bnum].input.push(bytes32(msg.sender));
+       blocks[bnum].input.push(bytes32(msg.value));
+       blocks[bnum].input.push(bytes32(0));
     }
     
+    function debugBlock(uint num) public returns (bytes32[]) {
+       return blocks[num].input;
+    }
+
     uint nonce;
-    
+
     function createEmptyFile(string fname) internal returns (bytes32) {
        nonce++;
        bytes32[] memory input = new bytes32[](2);
-       return filesystem.createFileWithContents(fname, nonce, input, 0);
+       return filesystem.createFileWithContents(fname, nonce+3000000, input, 0);
     }
 
     // need to check that the file has correct name
@@ -106,15 +112,14 @@ contract Plasma {
        Block storage last = blocks[bnum-1];
        bytes32 bundle = filesystem.makeBundle(bnum);
        filesystem.addToBundle(bundle, file);
-       filesystem.addToBundle(bundle, createEmptyFile("balance.data"));
+       filesystem.addToBundle(bundle, createEmptyFile("balances.data"));
        filesystem.addToBundle(bundle, createEmptyFile("control.data"));
        filesystem.addToBundle(bundle, last.state_file);
        filesystem.finalizeBundleIPFS(bundle, code, init);
 
-
        b.task = truebit.addWithParameters(filesystem.getInitHash(bundle), 1, 1, idToString(bundle), 20, 25, 8, 20, 10);
        truebit.requireFile(b.task, hashName("state.data"), 1);
-       truebit.requireFile(b.task, hashName("balance.data"), 1);
+       truebit.requireFile(b.task, hashName("balances.data"), 1);
 
        task_to_id[b.task] = bnum;
     }
@@ -129,13 +134,13 @@ contract Plasma {
        bytes32 file = filesystem.createFileWithContents("control.data", bnum, b.input, b.input.length*32);
        filesystem.addToBundle(bundle, file);
        filesystem.addToBundle(bundle, last.state_file);
-       filesystem.addToBundle(bundle, createEmptyFile("balance.data"));
+       filesystem.addToBundle(bundle, createEmptyFile("balances.data"));
        filesystem.addToBundle(bundle, createEmptyFile("input.data"));
        filesystem.finalizeBundleIPFS(bundle, code, init);
       
        b.task = truebit.addWithParameters(filesystem.getInitHash(bundle), 1, 1, idToString(bundle), 20, 25, 8, 20, 10);
        truebit.requireFile(b.task, hashName("state.data"), 1);
-       truebit.requireFile(b.task, hashName("balance.data"), 1);
+       truebit.requireFile(b.task, hashName("balances.data"), 1);
 
        task_to_id[b.task] = bnum;
     }
