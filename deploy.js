@@ -76,10 +76,8 @@ async function createIPFSFile(config, fname, new_name) {
 }
 
 async function outputFile(id) {
-    var lst = await filesystem.methods.getData(id).call(send_opt)
-    console.log("File data for", id, "is", lst)
-    var dta = await filesystem.methods.debug_forwardData(id, config.coindrop).call(send_opt)
-    console.log("DEBUG: ", dta)
+    var lst = await filesystem.methods.getRoot(id).call(send_opt)
+    console.log("File root for", id, "is", lst)
 }
 
 // Upload file to IPFS and calculate the root hash
@@ -99,24 +97,12 @@ async function doDeploy() {
     var dta = await contract.methods.debugBlock(1).call(send_opt)
     console.log("what happened", dta)
     var tx = await contract.methods.validateDeposit(1).send({gas:4700000, from:config.base})
-    console.log("deposit", tx)
-    /*
-    await contract.methods.addCoin(123, 234).send(send_opt)
-    var lst = await contract.methods.checkInput().call(send_opt)
-    console.log("Input", lst)
-    var dta2 = await contract.methods.debugFiles().call(send_opt)
-    console.log(dta2)
-    console.log("Hash", await contract.methods.debugHash().call(send_opt))
-    await contract.methods.submitBlock().send(send_opt)
+    console.log("submitted task", tx)
     contract.events.GotFiles(function (err,ev) {
         console.log("Files", ev.returnValues)
         var files = ev.returnValues.files
         files.forEach(outputFile)
     })
-    contract.events.Consuming(function (err,ev) {
-        console.log("Consuming", ev.returnValues)
-    })
-    */
     // process.exit(0)
 }
 

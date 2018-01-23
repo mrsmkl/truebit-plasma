@@ -144,6 +144,8 @@ contract Plasma {
 
        task_to_id[b.task] = bnum;
     }
+    
+    event GotFiles(bytes32[] files);
 
     function solved(uint id, bytes32[] files) public {
        // could check the task id
@@ -155,6 +157,8 @@ contract Plasma {
        
        b.balance_file = files[1];
        b.balance = filesystem.getRoot(files[1]);
+       
+       GotFiles(files);
        
     }
    
