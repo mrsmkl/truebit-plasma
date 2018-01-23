@@ -1,0 +1,23 @@
+{
+  "name": "truebit-plasma",
+  "version": "1.0.0",
+  "description": "Plasma MVP template for Truebit",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mrsmkl/truebit-plasma.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mrsmkl/truebit-plasma"
+  },
+  "homepage": "https://github.com/mrsmkl/truebit-plasma",
+  "dependencies": {
+    "ipfs-api": "^17.3.0",
+    "web3": "^1.0.0-beta.28"
+  }
+}

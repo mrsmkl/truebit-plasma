@@ -137,7 +137,7 @@ contract Plasma {
        filesystem.addToBundle(bundle, createEmptyFile("balances.data"));
        filesystem.addToBundle(bundle, createEmptyFile("input.data"));
        filesystem.finalizeBundleIPFS(bundle, code, init);
-      
+
        b.task = truebit.addWithParameters(filesystem.getInitHash(bundle), 1, 1, idToString(bundle), 20, 25, 8, 20, 10);
        truebit.requireFile(b.task, hashName("state.data"), 1);
        truebit.requireFile(b.task, hashName("balances.data"), 1);
